@@ -1,0 +1,11 @@
+{
+  "puppet_task_version": 1,
+  "supports_noop": false,
+  "description": "Run the cd4pe_backup script",
+  "parameters": {
+    "action": {
+      "description": "What action to perform",
+      "type": "Enum['backup','restore','failover']"
+    }     
+  }
+}

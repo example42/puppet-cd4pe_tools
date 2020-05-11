@@ -45,6 +45,7 @@ archive_backup () {
     cp $filename $backup_file
 
     echo "## Removing older backups from ${backup_dir}"
+    cd $backup_dir
     ls -t $backup_dir | tail -n +$backup_retention | xargs rm --
 }
 
