@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+action=${1:-"default"}
+filename=${2:-"<%= @options['filename'] %>"}
+work_dir=<%= @options['work_dir'] %>
+backup_dir=<%= @options['backup_dir'] %>
+cd4pe_hostname=<%= @options['cd4pe_hostname'] %>
+backup_retention=<%= @options['backup_retention'] %>
+now=$(date +%Y%m%d-%H%M)
+backup_file="${backup_dir}/cd4pe_backup-${now}.tgz"
+
+mkdir -p $work_dir
+mkdir -p $backup_dir
+
+showhelp() {
+cat <<HELP
+This script executes, backups and restores cd4pe data.
+Usage: ${0} [action] [backup_file]
+Available actions:
+  backup - Runs a backup of the data
+  restore - Restores a previous taken backup
+  failover - Runs a backup on and leave services stopped
+
+Default backup_file is $filename
+
+Examples:
+Backup to /var/tmp/cd4pe_backup.tgz: $0 backup
+Backup to /tmp/backup.gz: $0 backup /tmp/backup.tgz
+Restore from /var/tmp/cd4pe_backup.tgz: $0 restore
+Restore from /tmp/backup.tgz: $0 restore /tmp/backup.gz
+HELP
+}
+
+check_runnable() {
+    my_ip=$(facter ipaddress)
+    cd4pe_ip=$(host $cd4pe_hostname | grep address | cut -d ' ' -f 4)
+    if [ "x${my_ip}" != "x${cd4pe_ip}" ]; then
+      echo "This host ip: ${my_ip} does not match the ip of ${cd4pe_hostname}: ${cd4pe_ip}"
+      echo "Going to quit without any action."
+      exit 1
+    fi
+}
+
+archive_backup () {
+    echo "## Copying ${filename} to ${backup_file}"
+    cp $filename $backup_file
+
+    echo "## Removing older backups from ${backup_dir}"
+    ls -t $backup_dir | tail -n +$backup_retention | xargs rm --
+}
+
+backup() {
+    echo "## Doing Backup of /var/lib/docker/volumes/cd4pe-object-store"
+    tar -czPf "${work_dir}/docker_volume.tgz" /var/lib/docker/volumes/cd4pe-object-store
+    echo
+    echo "## Doing dump of Postgres cd4pe database"
+    su - pe-postgres -s /bin/bash -c "/opt/puppetlabs/server/bin/pg_dump cd4pe" | gzip > "${work_dir}/postgres_dump.gz"
+    echo
+    echo "## Copying /etc/puppetlabs/cd4pe/secret_key"
+    cp /etc/puppetlabs/cd4pe/secret_key "${work_dir}/secret_key"
+    echo
+    echo "## Creating ${filename} backup package"
+    tar -czvPf $filename $work_dir
+}
+
+restore() {
+    echo "## Cleaning up ${work_dir}"
+    [ -d $work_dir ] && mv $work_dir "${work_dir}.bak"
+    cd /
+    echo
+    echo "## Extracting ${filename} backup package"
+    tar -xvPzf $filename
+    echo
+    echo "## Extracting docker volume backup in /var/lib/docker/volumes/cd4pe-object-store"
+    tar -xPzf "${work_dir}/docker_volume.tgz"
+    echo
+    echo "## Importing dump of postgres database"
+    echo "drop database cd4pe" | su - pe-postgres -s /bin/bash -c "/opt/puppetlabs/server/bin/psql"
+    echo "create database cd4pe template=template1" | su - pe-postgres -s /bin/bash -c "/opt/puppetlabs/server/bin/psql"
+    zcat  "${work_dir}/postgres_dump.gz" | su - pe-postgres -s /bin/bash -c "/opt/puppetlabs/server/bin/psql cd4pe"
+    echo
+    echo "## Restoring /etc/puppetlabs/cd4pe/secret_key"
+    cp "${work_dir}/secret_key" /etc/puppetlabs/cd4pe/secret_key
+}
+
+stop_services() {
+    echo "## Disabling Puppet agent and stopping docker-cd4pe service"
+    puppet resource service docker-cd4pe ensure=stopped enable=false
+    puppet agent --disable
+}
+
+start_services() {
+    echo "## Starting docker-cd4pe service and enabling puppet-agent"
+    puppet resource service docker-cd4pe ensure=running enable=true
+    puppet agent --enable
+    puppet agent -t
+}
+
+case $action in
+  backup)
+    backup
+  ;;
+  restore)
+    check_runnable
+    stop_services
+    restore
+    start_services
+  ;;
+  failover)
+    stop_services
+    backup
+  ;;
+  *)
+    showhelp
+    exit
+  ;;
+esac
+
