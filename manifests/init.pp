@@ -45,7 +45,7 @@ class cd4pe_tools (
     }
     $script_params = $cd4pe_backup_script_params_defaults + $cd4pe_backup_script_params
 
-    file { $cd4pe_backup_path:
+    file { $cd4pe_backup_script_path:
       * => $script_params,
     }
 
